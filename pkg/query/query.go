@@ -1,15 +1,18 @@
 package query
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/grafana/regexp"
+	"gopkg.in/yaml.v3"
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
@@ -39,21 +42,27 @@ type engine struct {
 	suite *promqltest.LazyLoader
 }
 
-func setup() *engine {
-	// TODO: load from file
-	var inputSeries []series = []series{
-		{
-			Series: `container_fs_writes_total{prometheus="monitoring/kube-prometheus",service="kubelet"}`,
-			Values: "935 935 935 935 935 935 935 935 935 935 935",
-		},
+func setup(unitTestFile string) *engine {
+
+	bs, err := os.ReadFile(unitTestFile)
+	if err != nil {
+		panic(err)
+	}
+
+	var f promUnitTestsFile
+	dec := yaml.NewDecoder(bytes.NewReader(bs))
+	dec.KnownFields(false)
+	if err := dec.Decode(&f); err != nil {
+		panic(err)
 	}
 
 	seriesLoadingString := fmt.Sprintf("load %v\n", shortDuration(model.Duration(1*time.Minute)))
-	for _, is := range inputSeries {
-		seriesLoadingString += fmt.Sprintf("  %v %v\n", is.Series, is.Values)
+	for _, t := range f.Tests {
+		for _, is := range t.InputSeries {
+			seriesLoadingString += fmt.Sprintf("  %v %v\n", is.Series, is.Values)
+		}
 	}
 
-	// Setup testing suite.
 	suite, err := promqltest.NewLazyLoader(seriesLoadingString, promqltest.LazyLoaderOpts{
 		EnableAtModifier:     true,
 		EnableNegativeOffset: true,
@@ -61,12 +70,7 @@ func setup() *engine {
 	if err != nil {
 		panic(err)
 	}
-	/* 	defer func() {
-		err := suite.Close()
-		if err != nil {
-			panic(err)
-		}
-	}() */
+
 	suite.SubqueryInterval = 1 * time.Minute
 
 	return &engine{suite: suite}
@@ -131,34 +135,39 @@ func (e *engine) exec(expr string) ([]*model.Sample, error) {
 	return samples, nil
 }
 
-var e *engine = setup()
+var e *engine
 
-func Handle(w http.ResponseWriter, r *http.Request) {
-	regex, err := regexp.Compile("^(?:.*)$")
-	if err != nil {
-		panic(err)
-	}
-	prom_httputil.SetCORS(w, regex, r)
+func Handle(unitTestFile string) http.HandlerFunc {
 
-	samples, err := e.exec(r.FormValue("query"))
-	if err != nil {
-		http.Error(w, fmt.Sprintf("error while executin query: %v", err), http.StatusInternalServerError)
-	}
+	e = setup(unitTestFile)
 
-	resp := Response{
-		Status: "success",
-		Data: Result{
-			ResultType: "vector",
-			Result:     model.Vector(samples),
-		},
-	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		regex, err := regexp.Compile("^(?:.*)$")
+		if err != nil {
+			panic(err)
+		}
+		prom_httputil.SetCORS(w, regex, r)
 
-	buf, err := json.Marshal(resp)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error marshaling AST: %v", err), http.StatusBadRequest)
-		return
+		samples, err := e.exec(r.FormValue("query"))
+		if err != nil {
+			http.Error(w, fmt.Sprintf("error while executin query: %v", err), http.StatusInternalServerError)
+		}
+
+		resp := Response{
+			Status: "success",
+			Data: Result{
+				ResultType: "vector",
+				Result:     model.Vector(samples),
+			},
+		}
+
+		buf, err := json.Marshal(resp)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error marshaling AST: %v", err), http.StatusBadRequest)
+			return
+		}
+		w.Write(buf)
 	}
-	w.Write(buf)
 }
 
 type Result struct {

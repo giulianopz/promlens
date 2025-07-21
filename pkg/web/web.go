@@ -41,6 +41,7 @@ type Config struct {
 	GrafanaBackend             *grafana.Backend
 	DefaultPrometheusURL       string
 	DefaultGrafanaDatasourceID int64
+	UnitTestFile               string
 }
 
 // Serve serves the PromLens web UI and API.
@@ -88,7 +89,7 @@ func Serve(cfg *Config) error {
 	http.HandleFunc(cfg.RoutePrefix+"/api/page_config", instr("/api/page_config", pageconfig.Handle(cfg.Sharer, cfg.GrafanaBackend, cfg.DefaultPrometheusURL, cfg.DefaultGrafanaDatasourceID)))
 	http.HandleFunc(cfg.RoutePrefix+"/api/link", instr("/api/link", sharer.Handle(cfg.Logger, cfg.Sharer)))
 	http.HandleFunc(cfg.RoutePrefix+"/api/parse", instr("/api/parse", parser.Handle))
-	http.HandleFunc(cfg.RoutePrefix+"/api/v1/query", instr("/api/v1/query", query.Handle))
+	http.HandleFunc(cfg.RoutePrefix+"/api/v1/query", instr("/api/v1/query", query.Handle(cfg.UnitTestFile)))
 	if cfg.GrafanaBackend != nil {
 		http.HandleFunc(cfg.RoutePrefix+"/api/grafana/", instr("/api/grafana", cfg.GrafanaBackend.Handle(cfg.RoutePrefix)))
 	}

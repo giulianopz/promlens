@@ -30,7 +30,7 @@ export class PromAPI {
     const url =
       (this.serverSettings.access === 'proxy'
         ? `${this.pathPrefix}/api/grafana/api/datasources/proxy/${this.serverSettings.datasourceID}`
-        : `http://localhost:8080`) + resource;
+        : this.serverSettings.url) + resource;
 
     if (url.startsWith('http:') && window.location.protocol !== 'http:') {
       throw new Error(

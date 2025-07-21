@@ -159,6 +159,8 @@ func main() {
 	promlensURL := app.Flag("web.external-url", "The URL under which PromLens is externally reachable (for example, if PromLens is served via a reverse proxy). Used for generating relative and absolute links back to PromLens itself. If the URL has a path portion, it will be used to prefix all HTTP endpoints served by PromLens. If omitted, relevant URL components will be derived automatically.").Default("").String()
 	routePrefix := app.Flag("web.route-prefix", "Prefix for the internal routes of web endpoints. Defaults to path of --web.external-url.").Default("").String()
 
+	unitTestFile := app.Flag("unit-test-file", "A unit test file").Default("").String()
+
 	defaultPrometheusURL := app.Flag("web.default-prometheus-url", "The default Prometheus URL to load PromLens with.").Default("").String()
 
 	var logCfg promslog.Config
@@ -224,5 +226,6 @@ func main() {
 		GrafanaBackend:             gb,
 		DefaultPrometheusURL:       strings.TrimRight(*defaultPrometheusURL, "/"),
 		DefaultGrafanaDatasourceID: *grafanaDefaultDatasourceID,
+		UnitTestFile:               *unitTestFile,
 	}))
 }
