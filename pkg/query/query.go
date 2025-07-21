@@ -11,15 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/grafana/regexp"
 	"gopkg.in/yaml.v3"
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/prometheus/prometheus/promql/promqltest"
 	"github.com/prometheus/prometheus/storage"
-	prom_httputil "github.com/prometheus/prometheus/util/httputil"
 )
 
 func shortDuration(d model.Duration) string {
@@ -33,13 +32,10 @@ func shortDuration(d model.Duration) string {
 	return s
 }
 
-type series struct {
-	Series string `yaml:"series"`
-	Values string `yaml:"values"`
-}
-
 type engine struct {
-	suite *promqltest.LazyLoader
+	suite   *promqltest.LazyLoader
+	values  map[string][]string
+	metrics []string
 }
 
 func setup(unitTestFile string) *engine {
@@ -56,9 +52,26 @@ func setup(unitTestFile string) *engine {
 		panic(err)
 	}
 
+	values := make(map[string][]string)
+	metrics := []string{}
+
 	seriesLoadingString := fmt.Sprintf("load %v\n", shortDuration(model.Duration(1*time.Minute)))
 	for _, t := range f.Tests {
 		for _, is := range t.InputSeries {
+
+			expr, err := parser.ParseExpr(is.Series)
+			if err != nil {
+				panic(err)
+			}
+
+			switch n := parser.Node(expr).(type) {
+			case *parser.VectorSelector:
+				for _, m := range n.LabelMatchers {
+					values[m.Name] = append(values[m.Name], m.Value)
+				}
+				metrics = append(metrics, n.Name)
+			}
+
 			seriesLoadingString += fmt.Sprintf("  %v %v\n", is.Series, is.Values)
 		}
 	}
@@ -73,7 +86,7 @@ func setup(unitTestFile string) *engine {
 
 	suite.SubqueryInterval = 1 * time.Minute
 
-	return &engine{suite: suite}
+	return &engine{suite: suite, values: values, metrics: metrics}
 }
 
 func query(ctx context.Context, qs string, t time.Time, engine *promql.Engine, qu storage.Queryable) (promql.Vector, error) {
@@ -135,44 +148,101 @@ func (e *engine) exec(expr string) ([]*model.Sample, error) {
 	return samples, nil
 }
 
-var e *engine
+type queryHandler struct {
+	*engine
+}
 
-func Handle(unitTestFile string) http.HandlerFunc {
-
-	e = setup(unitTestFile)
-
-	return func(w http.ResponseWriter, r *http.Request) {
-		regex, err := regexp.Compile("^(?:.*)$")
-		if err != nil {
-			panic(err)
-		}
-		prom_httputil.SetCORS(w, regex, r)
-
-		samples, err := e.exec(r.FormValue("query"))
-		if err != nil {
-			http.Error(w, fmt.Sprintf("error while executin query: %v", err), http.StatusInternalServerError)
-		}
-
-		resp := Response{
-			Status: "success",
-			Data: Result{
-				ResultType: "vector",
-				Result:     model.Vector(samples),
-			},
-		}
-
-		buf, err := json.Marshal(resp)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error marshaling AST: %v", err), http.StatusBadRequest)
-			return
-		}
-		w.Write(buf)
+func NewHanlder(unitTestFile string) *queryHandler {
+	return &queryHandler{
+		engine: setup(unitTestFile),
 	}
 }
 
-type Result struct {
+func (h *queryHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	samples, err := h.exec(r.FormValue("query"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error while executin query: %v", err), http.StatusInternalServerError)
+	}
+
+	resp := Response{
+		Status: "success",
+		Data: QueryResult{
+			ResultType: "vector",
+			Result:     model.Vector(samples),
+		},
+	}
+
+	buf, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error marshaling AST: %v", err), http.StatusBadRequest)
+		return
+	}
+	w.Write(buf)
+}
+
+type QueryResult struct {
 	ResultType string      `json:"resultType,omitempty"`
 	Result     interface{} `json:"result,omitempty"`
+}
+
+func (h *queryHandler) HandleValues(w http.ResponseWriter, r *http.Request) {
+	labelName := r.PathValue("name")
+
+	var values []string
+	if labelName == "__name__" {
+		values = h.metrics
+	} else {
+		vv, found := h.values[labelName]
+		if !found {
+			http.Error(w, "", http.StatusBadRequest)
+		}
+		values = vv
+	}
+
+	buf, err := json.Marshal(Response{
+		Status: "success",
+		Data:   values,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error marshaling label values: %v", err), http.StatusBadRequest)
+		return
+	}
+	w.Write(buf)
+}
+
+var unknown metadata = metadata{
+	MetricType: "N/A",
+	Help:       "N/A",
+	Unit:       "N/A",
+}
+
+func (h *queryHandler) HandleMetadata(w http.ResponseWriter, r *http.Request) {
+	metricName := r.FormValue("metric")
+
+	results := make(map[string][]metadata)
+	for _, n := range h.metrics {
+		if metricName != "" && strings.HasPrefix(n, metricName) {
+			results[n] = []metadata{unknown}
+		} else {
+			results[n] = []metadata{unknown}
+		}
+	}
+
+	buf, err := json.Marshal(Response{
+		Status: "success",
+		Data:   results,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error marshaling metric metadata: %v", err), http.StatusBadRequest)
+		return
+	}
+	w.Write(buf)
+}
+
+type metadata struct {
+	MetricType string `json:"type"`
+	Help       string `json:"help"`
+	Unit       string `json:"unit"`
 }
 
 type Response struct {

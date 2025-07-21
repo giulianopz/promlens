@@ -89,7 +89,12 @@ func Serve(cfg *Config) error {
 	http.HandleFunc(cfg.RoutePrefix+"/api/page_config", instr("/api/page_config", pageconfig.Handle(cfg.Sharer, cfg.GrafanaBackend, cfg.DefaultPrometheusURL, cfg.DefaultGrafanaDatasourceID)))
 	http.HandleFunc(cfg.RoutePrefix+"/api/link", instr("/api/link", sharer.Handle(cfg.Logger, cfg.Sharer)))
 	http.HandleFunc(cfg.RoutePrefix+"/api/parse", instr("/api/parse", parser.Handle))
-	http.HandleFunc(cfg.RoutePrefix+"/api/v1/query", instr("/api/v1/query", query.Handle(cfg.UnitTestFile)))
+
+	qh := query.NewHanlder(cfg.UnitTestFile)
+	http.HandleFunc(cfg.RoutePrefix+"/api/v1/query", instr("/api/v1/query", qh.Handle))
+	http.HandleFunc(cfg.RoutePrefix+"/api/v1/label/{name}/values", instr("/api/v1/label/{name}/values", qh.HandleValues))
+	http.HandleFunc(cfg.RoutePrefix+"/api/v1/metadata", instr("/api/v1/metadata", qh.HandleMetadata))
+
 	if cfg.GrafanaBackend != nil {
 		http.HandleFunc(cfg.RoutePrefix+"/api/grafana/", instr("/api/grafana", cfg.GrafanaBackend.Handle(cfg.RoutePrefix)))
 	}
